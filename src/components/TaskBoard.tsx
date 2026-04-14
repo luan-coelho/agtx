@@ -5,14 +5,16 @@ import { useTasks } from "@/hooks/useTasks";
 import { useLabels } from "@/hooks/useLabels";
 import { store } from "@/lib/runtime";
 import { TaskRow } from "./TaskRow";
+import { Button } from "@/components/ui/button";
 import type { TaskStatus, Workspace } from "@/lib/tauri";
-import { X } from "lucide-react";
+import { X, Plus } from "lucide-react";
 
 interface Props {
   workspaces: Workspace[];
   workspaceFilter: string | null;
   onSelectWorkspace: (id: string | null) => void;
   onOpenSession: (id: string) => void;
+  onNewSession?: () => void;
   /** ID da sessão (PTY) atualmente ativa na aba — para destacar a row correspondente. */
   activeSessionId?: string | null;
 }
@@ -28,6 +30,7 @@ export function TaskBoard({
   workspaceFilter,
   onSelectWorkspace,
   onOpenSession,
+  onNewSession,
   activeSessionId,
 }: Props) {
   const { views, loading, refresh } = useTasks(workspaces, workspaceFilter);
@@ -74,29 +77,42 @@ export function TaskBoard({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-2 overflow-x-auto px-4 py-2 border-b">
-        <TabButton
-          active={workspaceFilter === null}
-          onClick={() => onSelectWorkspace(null)}
-          onClose={undefined}
-        >
-          All
-        </TabButton>
-        {workspaces.map((ws) => (
+      <header className="flex items-center justify-between gap-2 overflow-x-auto px-4 py-2 border-b">
+        <div className="flex items-center gap-2 overflow-x-auto min-w-0">
           <TabButton
-            key={ws.id}
-            active={workspaceFilter === ws.id}
-            onClick={() => onSelectWorkspace(ws.id)}
-            onClose={
-              workspaceFilter === ws.id
-                ? () => onSelectWorkspace(null)
-                : undefined
-            }
-            color={wsColorVar(ws.color)}
+            active={workspaceFilter === null}
+            onClick={() => onSelectWorkspace(null)}
+            onClose={undefined}
           >
-            {ws.name}
+            All
           </TabButton>
-        ))}
+          {workspaces.map((ws) => (
+            <TabButton
+              key={ws.id}
+              active={workspaceFilter === ws.id}
+              onClick={() => onSelectWorkspace(ws.id)}
+              onClose={
+                workspaceFilter === ws.id
+                  ? () => onSelectWorkspace(null)
+                  : undefined
+              }
+              color={wsColorVar(ws.color)}
+            >
+              {ws.name}
+            </TabButton>
+          ))}
+        </div>
+        {onNewSession && (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onNewSession}
+            title="Nova sessão"
+            className="shrink-0"
+          >
+            <Plus className="size-4" />
+          </Button>
+        )}
       </header>
 
       <div className="flex-1 overflow-auto px-4 py-3">
@@ -105,7 +121,7 @@ export function TaskBoard({
             Carregando tarefas…
           </div>
         ) : views.length === 0 ? (
-          <EmptyState />
+          <EmptyState onNewSession={onNewSession} />
         ) : (
           SECTION_ORDER.map(({ key, label }) => {
             const items = grouped[key];
@@ -193,7 +209,7 @@ function TabButton({
   );
 }
 
-function EmptyState() {
+function EmptyState({ onNewSession }: { onNewSession?: () => void }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 py-12 text-center">
       <div className="size-10 rounded-xl bg-gradient-to-br from-primary/30 to-primary/5" />
@@ -203,6 +219,15 @@ function EmptyState() {
           Abra uma conversa com Claude Code para criar sua primeira tarefa.
         </p>
       </div>
+      {onNewSession && (
+        <Button
+          onClick={onNewSession}
+          size="sm"
+          className="mt-2"
+        >
+          <Plus className="size-4" /> Nova sessão
+        </Button>
+      )}
     </div>
   );
 }

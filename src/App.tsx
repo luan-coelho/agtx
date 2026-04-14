@@ -155,6 +155,7 @@ function App() {
                 workspaceFilter={workspaceFilter}
                 onSelectWorkspace={setWorkspaceFilter}
                 onOpenSession={openTabFor}
+                onNewSession={openNewSession}
                 activeSessionId={activeTabId}
               />
             </div>
