@@ -1,0 +1,33 @@
+[package]
+name = "agtx"
+version = "0.1.0"
+description = "Orquestrador desktop de sessões CLI/TUI de agentes de IA"
+authors = ["Luan"]
+edition = "2021"
+
+[lib]
+name = "agtx_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["unstable"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-pty = "0.2.1"
+tauri-plugin-notification = "2.3.3"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+axum = { version = "0.8.9", features = ["macros"] }
+tokio = { version = "1.51.1", features = ["rt-multi-thread", "macros", "sync", "io-util"] }
+uuid = { version = "1.23.0", features = ["v4", "serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
+anyhow = "1.0.102"
+thiserror = "2.0.18"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+tauri-plugin-dialog = "2.7.0"
+dirs = "6.0.0"
+
