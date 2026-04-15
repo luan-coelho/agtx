@@ -90,6 +90,7 @@ export interface CreateSessionOptions {
 export interface HttpInfo {
   port: number;
   secret: string;
+  userPath: string;
 }
 
 export interface HooksStatus {
@@ -155,6 +156,8 @@ export interface ClaudeSessionSummary {
 
 export const api = {
   httpInfo: () => invoke<HttpInfo>("http_info"),
+  transcriptRefresh: (sessionId: string, transcriptPath: string) =>
+    invoke<void>("transcript_refresh", { sessionId, transcriptPath }),
   hooksStatus: () => invoke<HooksStatus>("hooks_status"),
   hooksInstall: () => invoke<HooksStatus>("hooks_install"),
   hooksUninstall: () => invoke<HooksStatus>("hooks_uninstall"),

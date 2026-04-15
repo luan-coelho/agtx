@@ -1,11 +1,12 @@
 use chrono::Utc;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::claude_index;
 use crate::db;
 use crate::hooks::installer;
 use crate::state::AppState;
+use crate::transcript;
 
 fn now_ms() -> i64 {
     Utc::now().timestamp_millis()
@@ -119,6 +120,7 @@ pub fn events_list(
 pub struct HttpInfo {
     pub port: u16,
     pub secret: String,
+    pub user_path: String,
 }
 
 #[tauri::command]
@@ -126,7 +128,53 @@ pub fn http_info(state: State<'_, AppState>) -> HttpInfo {
     HttpInfo {
         port: state.http_port,
         secret: state.http_secret.clone(),
+        user_path: state.user_path.clone(),
     }
+}
+
+/// Reparse do transcript on-demand. Útil para detectar trocas de modelo
+/// (via /model ou Ctrl+P) que não disparam hooks, mas alteram o transcript.
+/// Emite `session-metrics` se o parse for bem-sucedido.
+#[tauri::command]
+pub fn transcript_refresh(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    session_id: String,
+    transcript_path: String,
+) -> Result<(), String> {
+    let path = std::path::Path::new(&transcript_path);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let metrics = transcript::parse(path).map_err(map_err)?;
+    let metrics_json = serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".into());
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::update_session_metrics(
+            &conn,
+            &session_id,
+            metrics.model.as_deref(),
+            Some(&transcript_path),
+            &metrics_json,
+            now_ms(),
+        )
+        .map_err(map_err)?;
+    }
+
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MetricsEvent<'a> {
+        session_id: &'a str,
+        metrics: &'a transcript::SessionMetrics,
+        transcript_path: Option<&'a str>,
+    }
+    let ev = MetricsEvent {
+        session_id: &session_id,
+        metrics: &metrics,
+        transcript_path: Some(&transcript_path),
+    };
+    let _ = app.emit("session-metrics", &ev);
+    Ok(())
 }
 
 #[tauri::command]

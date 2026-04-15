@@ -74,8 +74,11 @@ pub fn parse(path: &Path) -> Result<SessionMetrics> {
                 .and_then(|msg| msg.get("model"))
                 .and_then(|x| x.as_str())
             {
-                // Sempre atualiza — queremos o modelo mais recente.
-                m.model = Some(model.to_string());
+                // Pula modelos sintéticos (ex. "<synthetic>") que Claude Code
+                // usa para mensagens de sistema — não representam o modelo real.
+                if !model.starts_with('<') {
+                    m.model = Some(model.to_string());
+                }
             }
             if let Some(usage) = message.and_then(|msg| msg.get("usage")) {
                 let input = usage

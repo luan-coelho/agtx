@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     label TEXT,
     created_at INTEGER NOT NULL,
     completed_at INTEGER,
+    hidden INTEGER NOT NULL DEFAULT 0,
     UNIQUE(workspace_id, seq)
 );
 
@@ -100,14 +101,21 @@ fn apply_migrations(conn: &Connection, db_path: &Path) -> Result<()> {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap_or(0);
 
-    if user_version >= 5 {
+    if user_version >= 6 {
         conn.execute_batch(SCHEMA_V2)?;
+        return Ok(());
+    }
+
+    if user_version == 5 {
+        conn.execute_batch(SCHEMA_V2)?;
+        migrate_v5_to_v6(conn)?;
         return Ok(());
     }
 
     if user_version == 4 {
         conn.execute_batch(SCHEMA_V2)?;
         migrate_v4_to_v5(conn)?;
+        migrate_v5_to_v6(conn)?;
         return Ok(());
     }
 
@@ -115,6 +123,7 @@ fn apply_migrations(conn: &Connection, db_path: &Path) -> Result<()> {
         conn.execute_batch(SCHEMA_V2)?;
         migrate_v3_to_v4(conn)?;
         migrate_v4_to_v5(conn)?;
+        migrate_v5_to_v6(conn)?;
         return Ok(());
     }
 
@@ -123,6 +132,7 @@ fn apply_migrations(conn: &Connection, db_path: &Path) -> Result<()> {
         migrate_v2_to_v3(conn)?;
         migrate_v3_to_v4(conn)?;
         migrate_v4_to_v5(conn)?;
+        migrate_v5_to_v6(conn)?;
         return Ok(());
     }
 
@@ -138,7 +148,7 @@ fn apply_migrations(conn: &Connection, db_path: &Path) -> Result<()> {
         // DB novo: cria direto na versão corrente.
         conn.execute_batch(SCHEMA_V2)?;
         seed_default_labels(conn, Utc::now().timestamp_millis())?;
-        conn.pragma_update(None, "user_version", 5)?;
+        conn.pragma_update(None, "user_version", 6)?;
         return Ok(());
     }
 
@@ -159,7 +169,8 @@ fn apply_migrations(conn: &Connection, db_path: &Path) -> Result<()> {
     }
     migrate_v2_to_v3(conn)?;
     migrate_v3_to_v4(conn)?;
-    migrate_v2_to_v3(conn)?;
+    migrate_v4_to_v5(conn)?;
+    migrate_v5_to_v6(conn)?;
 
     Ok(())
 }
@@ -226,6 +237,21 @@ fn migrate_v4_to_v5(conn: &Connection) -> Result<()> {
     )?;
     seed_default_labels(conn, Utc::now().timestamp_millis())?;
     conn.pragma_update(None, "user_version", 5)?;
+    Ok(())
+}
+
+fn migrate_v5_to_v6(conn: &Connection) -> Result<()> {
+    tracing::info!("migrating schema v5 → v6");
+    if let Err(e) = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
+        [],
+    ) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column name") {
+            return Err(e.into());
+        }
+    }
+    conn.pragma_update(None, "user_version", 6)?;
     Ok(())
 }
 
@@ -787,7 +813,7 @@ pub fn list_tasks(
         Some(ws) => {
             let mut stmt = conn.prepare(
                 "SELECT id, workspace_id, claude_session_id, seq, title_override, status, label, created_at, completed_at
-                 FROM tasks WHERE workspace_id = ?1 ORDER BY seq DESC",
+                 FROM tasks WHERE workspace_id = ?1 AND hidden = 0 ORDER BY seq DESC",
             )?;
             let iter = stmt.query_map(params![ws], |r| {
                 Ok(DbTask {
@@ -807,7 +833,7 @@ pub fn list_tasks(
         None => {
             let mut stmt = conn.prepare(
                 "SELECT id, workspace_id, claude_session_id, seq, title_override, status, label, created_at, completed_at
-                 FROM tasks ORDER BY workspace_id, seq DESC",
+                 FROM tasks WHERE hidden = 0 ORDER BY workspace_id, seq DESC",
             )?;
             let iter = stmt.query_map([], |r| {
                 Ok(DbTask {
@@ -869,7 +895,7 @@ pub fn update_task_title(
 
 pub fn delete_task(conn: &Connection, claude_session_id: &str) -> Result<()> {
     conn.execute(
-        "DELETE FROM tasks WHERE claude_session_id = ?1",
+        "UPDATE tasks SET hidden = 1 WHERE claude_session_id = ?1",
         params![claude_session_id],
     )?;
     Ok(())

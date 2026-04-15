@@ -3,7 +3,9 @@ import { cn } from "@/lib/utils";
 import { wsColorVar } from "@/lib/workspaceColors";
 import { useTasks } from "@/hooks/useTasks";
 import { useLabels } from "@/hooks/useLabels";
+import { useSessions } from "@/hooks/useSessions";
 import { store } from "@/lib/runtime";
+import type { SessionStatus } from "@/lib/status";
 import { TaskRow } from "./TaskRow";
 import { Button } from "@/components/ui/button";
 import type { TaskStatus, Workspace } from "@/lib/tauri";
@@ -19,10 +21,10 @@ interface Props {
   activeSessionId?: string | null;
 }
 
-const SECTION_ORDER: { key: TaskStatus; label: string }[] = [
-  { key: "backlog", label: "Backlog" },
-  { key: "planning", label: "Planning & Implementation" },
-  { key: "done", label: "Done" },
+const SECTION_ORDER: { key: TaskStatus; label: string; color: string }[] = [
+  { key: "backlog", label: "Backlog", color: "var(--status-attention)" },
+  { key: "planning", label: "Planning & Implementation", color: "var(--status-running)" },
+  { key: "done", label: "Done", color: "var(--status-done)" },
 ];
 
 export function TaskBoard({
@@ -35,6 +37,24 @@ export function TaskBoard({
 }: Props) {
   const { views, loading, refresh } = useTasks(workspaces, workspaceFilter);
   const { labels } = useLabels();
+  const { sessions } = useSessions();
+
+  // Map reativo: claudeSessionId → status da sessão PTY viva.
+  // Usado para exibir indicador de "precisa atenção" (confirmação pendente) e
+  // outros estados em tempo real no TaskRow.
+  const liveStatusByClaudeId = useMemo(() => {
+    const m = new Map<string, SessionStatus>();
+    for (const s of sessions) {
+      if (s.cli !== "claude" || !s.claudeSessionId) continue;
+      if (!store.isAlive(s.id)) continue;
+      const prev = m.get(s.claudeSessionId);
+      // Se houver várias, prioriza a mais "urgente".
+      if (!prev || statusUrgency(s.status) > statusUrgency(prev)) {
+        m.set(s.claudeSessionId, s.status);
+      }
+    }
+    return m;
+  }, [sessions]);
 
   const wsById = useMemo(
     () => new Map(workspaces.map((w) => [w.id, w] as const)),
@@ -123,13 +143,14 @@ export function TaskBoard({
         ) : views.length === 0 ? (
           <EmptyState onNewSession={onNewSession} />
         ) : (
-          SECTION_ORDER.map(({ key, label }) => {
+          SECTION_ORDER.map(({ key, label, color }) => {
             const items = grouped[key];
             if (items.length === 0) return null;
             return (
               <section key={key} className="mb-4">
                 <div className="mb-1 flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
-                  <span className="font-medium">{label}</span>
+                  <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                  <span className="font-medium" style={{ color }}>{label}</span>
                   <span className="font-mono">{items.length}</span>
                 </div>
                 <div className="rounded-md border bg-card/20">
@@ -143,6 +164,7 @@ export function TaskBoard({
                         workspace={ws}
                         showWorkspace={workspaceFilter === null}
                         labels={labels}
+                        liveStatus={liveStatusByClaudeId.get(v.task.claudeSessionId) ?? null}
                         active={activeClaudeIds.has(v.task.claudeSessionId)}
                         onOpen={() => {
                           if (ws) {
@@ -161,6 +183,23 @@ export function TaskBoard({
       </div>
     </div>
   );
+}
+
+function statusUrgency(s: SessionStatus): number {
+  switch (s) {
+    case "needs-attention":
+      return 5;
+    case "waiting-input":
+      return 4;
+    case "running":
+      return 3;
+    case "starting":
+      return 2;
+    case "idle":
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 function TabButton({

@@ -1,10 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { cn } from "@/lib/utils";
-import type { Session, SessionMetrics } from "@/lib/tauri";
+import { api, type Session, type SessionMetrics } from "@/lib/tauri";
 import {
   ArrowDown,
   ArrowUp,
-  Clock,
   Cpu,
   Database,
   MessageSquare,
@@ -15,17 +14,6 @@ function fmtTokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
   return `${(n / 1_000_000).toFixed(1)}M`;
-}
-
-function fmtUptime(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rs = s % 60;
-  if (m < 60) return rs > 0 ? `${m}m ${rs}s` : `${m}m`;
-  const h = Math.floor(m / 60);
-  const rm = m % 60;
-  return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
 }
 
 function prettyModel(model: string | null | undefined): string {
@@ -40,11 +28,18 @@ function prettyModel(model: string | null | undefined): string {
   return m;
 }
 
-function contextLimitForModel(model: string | null | undefined): number {
+function contextLimitForModel(
+  model: string | null | undefined,
+  observed: number = 0,
+): number {
+  if (observed > 200_000) return 1_000_000;
   if (!model) return 200_000;
   const lower = model.toLowerCase();
   if (lower.includes("1m")) return 1_000_000;
   if (lower.includes("haiku")) return 200_000;
+  // Claude Code ativa 1M por padrão nos modelos 4.6 (opus/sonnet).
+  if (lower.includes("opus-4-6") || lower.includes("sonnet-4-6"))
+    return 1_000_000;
   return 200_000;
 }
 
@@ -56,22 +51,25 @@ export function SessionInfoBar({ session }: Props) {
   const metrics = session.metrics;
   const model = metrics?.model ?? session.model;
 
-  // Tick para atualizar uptime sem recriar o componente inteiro.
-  const [, setTick] = useState(0);
+  // Polling do transcript para capturar trocas de modelo (/model, Ctrl+P) e
+  // atualizações de tokens sem depender de hook event. 3s é suficiente para
+  // perceber mudanças sem consumir CPU.
+  const transcriptPath = session.transcriptPath;
   useEffect(() => {
-    const id = window.setInterval(() => setTick((n) => n + 1), 5000);
+    if (!transcriptPath) return;
+    const id = window.setInterval(() => {
+      void api.transcriptRefresh(session.id, transcriptPath).catch(() => {});
+    }, 3000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [session.id, transcriptPath]);
 
-  const uptime = fmtUptime(Date.now() - session.createdAt);
-  const limit = contextLimitForModel(model);
   const context = metrics?.contextTokens ?? 0;
+  const limit = contextLimitForModel(model, context);
   const contextPct = Math.min(100, (context / limit) * 100);
 
   return (
     <div className="flex items-center gap-4 border-b bg-card/20 px-4 py-1.5 text-[11px] font-mono text-muted-foreground">
       <MetricChip icon={<Sparkles className="size-3" />} label={prettyModel(model)} />
-      <MetricChip icon={<Clock className="size-3" />} label={uptime} />
       <ContextGauge used={context} limit={limit} pct={contextPct} />
       {metrics && (
         <>

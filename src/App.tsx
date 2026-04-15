@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Sidebar } from "@/components/Sidebar";
 import { TaskBoard } from "@/components/TaskBoard";
@@ -31,6 +31,41 @@ function App() {
 
   const [wsDialogOpen, setWsDialogOpen] = useState(false);
   const [wsEditing, setWsEditing] = useState<Workspace | null>(null);
+
+  const [leftPct, setLeftPct] = useState(50);
+  const splitRef = useRef<HTMLElement | null>(null);
+  const draggingRef = useRef(false);
+
+  const onSplitMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    store.setRefitSuspended(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!draggingRef.current || !splitRef.current) return;
+      const rect = splitRef.current.getBoundingClientRect();
+      const pct = ((e.clientX - rect.left) / rect.width) * 100;
+      setLeftPct(Math.min(80, Math.max(20, pct)));
+    };
+    const onUp = () => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      store.setRefitSuspended(false);
+      if (activeTabId) store.refit(activeTabId);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [activeTabId]);
 
   useEffect(() => {
     void store.bootstrap();
@@ -147,9 +182,12 @@ function App() {
             <Settings />
           </main>
         ) : (
-          <main className="flex flex-1 min-w-0">
+          <main ref={splitRef} className="flex flex-1 min-w-0">
             {/* Coluna central: Task Board */}
-            <div className="flex w-[480px] shrink-0 flex-col border-r">
+            <div
+              className="flex min-w-0 flex-col border-r"
+              style={{ width: `${leftPct}%` }}
+            >
               <TaskBoard
                 workspaces={workspaces}
                 workspaceFilter={workspaceFilter}
@@ -160,8 +198,19 @@ function App() {
               />
             </div>
 
+            {/* Divisor arrastável */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={onSplitMouseDown}
+              className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/40 transition-colors"
+            />
+
             {/* Coluna direita: terminal com abas */}
-            <div className="flex flex-1 min-w-0 flex-col">
+            <div
+              className="flex min-w-0 flex-col"
+              style={{ width: `${100 - leftPct}%` }}
+            >
               <TerminalTabs
                 tabs={tabs}
                 activeId={activeTabId}

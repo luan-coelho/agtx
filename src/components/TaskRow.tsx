@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Diamond, Loader2, Circle, CheckCircle2, X } from "lucide-react";
+import { Diamond, Loader2, Circle, CheckCircle2, X, Bell } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { wsColorVar } from "@/lib/workspaceColors";
+import type { SessionStatus } from "@/lib/status";
 import {
   api,
   type Label,
@@ -24,6 +25,8 @@ interface Props {
   showWorkspace?: boolean;
   labels: Label[];
   active?: boolean;
+  /** Status da sessão PTY viva vinculada (null se não há sessão rodando). */
+  liveStatus?: SessionStatus | null;
   onOpen: () => void;
   onChanged: () => void;
 }
@@ -35,6 +38,7 @@ export function TaskRow({
   showWorkspace,
   labels,
   active,
+  liveStatus,
   onOpen,
   onChanged,
 }: Props) {
@@ -90,15 +94,24 @@ export function TaskRow({
   return (
     <div
       className={cn(
-        "group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+        "group flex items-start gap-3 rounded-md px-3 py-2 text-sm transition-colors",
         "border-b border-border/40 last:border-b-0",
         active ? "bg-accent/60" : "hover:bg-accent/30",
       )}
     >
-      <span className="font-mono text-[11px] text-muted-foreground tabular-nums w-12 shrink-0">
+      <span className="font-mono text-[11px] text-muted-foreground tabular-nums w-12 shrink-0 pt-0.5">
         #{task.seq}
       </span>
-      <Diamond className="size-3.5 shrink-0 text-muted-foreground/70" />
+      <Diamond
+        className={cn(
+          "size-3.5 shrink-0 mt-1",
+          task.status === "done"
+            ? "text-[var(--status-done)]"
+            : task.status === "planning"
+            ? "text-[var(--status-running)]"
+            : "text-[var(--status-attention)]",
+        )}
+      />
 
       <button
         onClick={onOpen}
@@ -125,11 +138,30 @@ export function TaskRow({
             className="w-full bg-transparent outline-none text-foreground font-mono text-sm"
           />
         ) : (
-          <span className="truncate text-foreground/90 group-hover:text-foreground">
+          <span className="block break-words text-foreground/90 group-hover:text-foreground">
             {title}
           </span>
         )}
       </button>
+
+      {(liveStatus === "needs-attention" || liveStatus === "waiting-input") && (
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-mono shrink-0",
+            liveStatus === "needs-attention"
+              ? "text-[var(--status-attention)] border-[var(--status-attention)]/40 bg-[var(--status-attention)]/10 animate-pulse"
+              : "text-[var(--status-waiting)] border-[var(--status-waiting)]/40 bg-[var(--status-waiting)]/10",
+          )}
+          title={
+            liveStatus === "needs-attention"
+              ? "Aguardando confirmação do usuário"
+              : "Aguardando input"
+          }
+        >
+          <Bell className="size-2.5" />
+          {liveStatus === "needs-attention" ? "confirmar" : "input"}
+        </span>
+      )}
 
       {showWorkspace && workspace && (
         <span className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground shrink-0">

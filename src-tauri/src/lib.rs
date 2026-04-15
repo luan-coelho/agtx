@@ -42,13 +42,42 @@ pub fn run() {
 
             let http = hooks::receiver::start(app.handle().clone(), db_arc, secret)
                 .expect("failed to start hook receiver");
+            let user_path = state::resolve_user_path();
+            tracing::info!(user_path = %user_path, "resolved user PATH");
             let state = state::AppState {
                 db: state.db,
                 http_port: http.port,
                 http_secret: http.secret,
+                user_path,
             };
             tracing::info!(port = state.http_port, "hook receiver ready");
             app.manage(state);
+
+            // Garante que os hooks do agtx estão instalados em ~/.claude/settings.json.
+            // Só reinstala se algum hook esperado estiver faltando — evita gerar
+            // backup a cada inicialização quando já está tudo ok.
+            let expected: std::collections::HashSet<&str> = hooks::schema::HookEventKind::all()
+                .iter()
+                .map(|k| k.as_str())
+                .collect();
+            let needs_install = match hooks::installer::status() {
+                Ok(s) => {
+                    let have: std::collections::HashSet<&str> =
+                        s.installed_events.iter().map(|x| x.as_str()).collect();
+                    !expected.is_subset(&have) || s.has_duplicates
+                }
+                Err(_) => true,
+            };
+            if needs_install {
+                match hooks::installer::install() {
+                    Ok(s) => tracing::info!(
+                        events = ?s.installed_events,
+                        "agtx hooks installed",
+                    ),
+                    Err(e) => tracing::warn!(error = %e, "failed to install agtx hooks"),
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -61,6 +90,7 @@ pub fn run() {
             commands::event_log,
             commands::events_list,
             commands::http_info,
+            commands::transcript_refresh,
             commands::hooks_status,
             commands::hooks_install,
             commands::hooks_uninstall,

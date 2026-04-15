@@ -2,6 +2,8 @@ import { spawn, type IPty } from "tauri-pty";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -46,6 +48,7 @@ interface RuntimeEntry {
   term?: Terminal;
   fit?: FitAddon;
   serialize?: SerializeAddon;
+  webgl?: WebglAddon;
   attached: boolean;
   idleTimer: number | null;
 }
@@ -147,6 +150,7 @@ async function logEvent(
 
 class SessionStore {
   private entries = new Map<string, RuntimeEntry>();
+  private refitSuspended = false;
   private workspaces = new Map<string, Workspace>();
   private listeners = new Set<Listener>();
   private wsListeners = new Set<Listener>();
@@ -338,10 +342,19 @@ class SessionStore {
       }
     }
 
+    // Em bundles (AppImage/.deb) o processo herda uma PATH mínima do desktop
+    // environment, sem `~/.local/bin`, nvm, etc. Sem PATH correta, binários
+    // como `claude` não são encontrados e o PTY morre sem feedback.
+    const userPath =
+      this.httpInfo?.userPath && this.httpInfo.userPath.length > 0
+        ? this.httpInfo.userPath
+        : undefined;
     const env: Record<string, string> = {
       TERM: "xterm-256color",
       COLORTERM: "truecolor",
       AGTX_SESSION_TRACKER: session.id,
+      ...(userPath ? { PATH: userPath } : {}),
+      ...(opts.cli === "claude" ? { CLAUDE_CODE_NO_FLICKER: "1" } : {}),
       ...(this.httpInfo
         ? {
             AGTX_HOOK_PORT: String(this.httpInfo.port),
@@ -351,12 +364,19 @@ class SessionStore {
       ...opts.env,
     };
 
-    const pty = spawn(file, args, {
-      cols: 80,
-      rows: 24,
-      cwd: opts.cwd,
-      env,
-    });
+    let pty: IPty;
+    try {
+      pty = spawn(file, args, {
+        cols: 80,
+        rows: 24,
+        cwd: opts.cwd,
+        env,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("spawn failed", { file, args, cwd: opts.cwd, error: msg });
+      throw new Error(`Falha ao iniciar ${file}: ${msg}`);
+    }
     session.pid = pty.pid;
 
     const term = new Terminal({
@@ -440,6 +460,18 @@ class SessionStore {
       e.pty = undefined;
       this.setStatus(session.id, exitCode === 0 ? "done" : "error");
       void logEvent(session.id, "exit", { exitCode });
+      // Deixa visível no terminal o motivo de encerramento — em builds
+      // empacotados um "comando não encontrado" ou erro silencioso some sem
+      // feedback, deixando o xterm em branco.
+      try {
+        const hint =
+          exitCode === 127
+            ? `\r\n\x1b[31m[agtx] comando não encontrado: ${file}\x1b[0m`
+            : exitCode === 0
+            ? `\r\n\x1b[90m[agtx] processo encerrado (exit 0)\x1b[0m`
+            : `\r\n\x1b[31m[agtx] processo encerrado (exit ${exitCode})\x1b[0m`;
+        e.term?.write(hint);
+      } catch {}
     });
 
     this.entries.set(session.id, entry);
@@ -472,11 +504,25 @@ class SessionStore {
   }
 
   refit(id: string) {
+    if (this.refitSuspended) return;
     const e = this.entries.get(id);
-    if (!e || !e.attached) return;
+    if (!e || !e.attached || !e.term || !e.fit) return;
     try {
-      e.fit?.fit();
+      const buf = e.term.buffer.active;
+      const distanceFromBottom = buf.baseY - buf.viewportY;
+      e.fit.fit();
+      if (distanceFromBottom === 0) {
+        e.term.scrollToBottom();
+      } else {
+        const nextBuf = e.term.buffer.active;
+        const targetY = Math.max(0, nextBuf.baseY - distanceFromBottom);
+        e.term.scrollToLine(targetY);
+      }
     } catch {}
+  }
+
+  setRefitSuspended(v: boolean) {
+    this.refitSuspended = v;
   }
 
   focus(id: string) {

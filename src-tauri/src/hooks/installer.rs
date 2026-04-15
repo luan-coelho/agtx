@@ -66,15 +66,35 @@ fn backup_if_needed() -> Result<Option<PathBuf>> {
 }
 
 /// Retorna apenas os entries que NÃO são gerenciados pelo agtx.
+/// Reconhece tanto pelo marker explícito (`agtx_managed: true`) quanto pelo
+/// padrão do comando curl (para limpar entradas antigas sem marker).
 fn strip_agtx(arr: &[Value]) -> Vec<Value> {
     arr.iter()
         .filter(|entry| {
-            entry
-                .as_object()
-                .and_then(|o| o.get(AGTX_MARKER))
+            let obj = match entry.as_object() {
+                Some(o) => o,
+                None => return true,
+            };
+            if obj
+                .get(AGTX_MARKER)
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false)
-                == false
+            {
+                return false;
+            }
+            let looks_agtx = obj
+                .get("hooks")
+                .and_then(|h| h.as_array())
+                .map(|hooks| {
+                    hooks.iter().any(|h| {
+                        h.get("command")
+                            .and_then(|c| c.as_str())
+                            .map(|s| s.contains("AGTX_HOOK_PORT") && s.contains("/hook/"))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+            !looks_agtx
         })
         .cloned()
         .collect()
@@ -97,21 +117,45 @@ pub struct HooksStatus {
     pub installed: bool,
     pub settings_path: String,
     pub installed_events: Vec<String>,
+    /// true se existem entradas agtx duplicadas em algum evento (ex: uma com
+    /// marker e outra legacy sem marker). O auto-installer deve reinstalar.
+    pub has_duplicates: bool,
+}
+
+fn looks_like_agtx(entry: &Value) -> bool {
+    let obj = match entry.as_object() {
+        Some(o) => o,
+        None => return false,
+    };
+    if obj.get(AGTX_MARKER).and_then(|v| v.as_bool()).unwrap_or(false) {
+        return true;
+    }
+    obj.get("hooks")
+        .and_then(|h| h.as_array())
+        .map(|hooks| {
+            hooks.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.contains("AGTX_HOOK_PORT") && s.contains("/hook/"))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }
 
 pub fn status() -> Result<HooksStatus> {
     let value = read_settings()?;
     let mut installed_events = Vec::new();
+    let mut has_duplicates = false;
     if let Some(hooks) = value.get("hooks").and_then(|v| v.as_object()) {
         for (event_name, entries) in hooks {
             if let Some(arr) = entries.as_array() {
-                let has_agtx = arr.iter().any(|e| {
-                    e.get(AGTX_MARKER)
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                });
-                if has_agtx {
+                let agtx_count = arr.iter().filter(|e| looks_like_agtx(e)).count();
+                if agtx_count > 0 {
                     installed_events.push(event_name.clone());
+                }
+                if agtx_count > 1 {
+                    has_duplicates = true;
                 }
             }
         }
@@ -120,6 +164,7 @@ pub fn status() -> Result<HooksStatus> {
         installed: !installed_events.is_empty(),
         settings_path: settings_path().to_string_lossy().to_string(),
         installed_events,
+        has_duplicates,
     })
 }
 

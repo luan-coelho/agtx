@@ -71,16 +71,24 @@ export function useTasks(
     void refresh();
   }, [refresh]);
 
-  // Atualiza quando hooks chegam.
+  // Atualiza quando hooks chegam. Debounce para evitar re-renders em cascata
+  // durante sessões ativas (hooks chegam com alta frequência).
   useEffect(() => {
     let un: UnlistenFn | undefined;
-    listen("hook-received", () => {
-      void refresh();
-    }).then((u) => {
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      if (pending) clearTimeout(pending);
+      pending = setTimeout(() => {
+        pending = null;
+        void refresh();
+      }, 400);
+    };
+    listen("hook-received", schedule).then((u) => {
       un = u;
     });
     return () => {
       un?.();
+      if (pending) clearTimeout(pending);
     };
   }, [refresh]);
 
