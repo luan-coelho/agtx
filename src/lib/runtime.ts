@@ -392,8 +392,15 @@ class SessionStore {
     });
     const fit = new FitAddon();
     const serialize = new SerializeAddon();
+    const unicode11 = new Unicode11Addon();
     term.loadAddon(fit);
     term.loadAddon(serialize);
+    term.loadAddon(unicode11);
+    // Usa tabela de larguras de char do Unicode 11 (inclui acentuados
+    // pré-compostos, emoji, CJK atualizados). Sem isso, xterm cai no Unicode
+    // 6 e calcula largura errada para `ó`/`ç`/etc, causando gaps visuais ao
+    // digitar em layouts com dead keys (ABNT2/US-Intl).
+    term.unicode.activeVersion = "11";
 
     const entry: RuntimeEntry = {
       session,
@@ -494,6 +501,24 @@ class SessionStore {
     const e = this.entries.get(id);
     if (!e || !e.term || e.attached) return;
     e.term.open(element);
+    // WebGL só pode ser carregado após `term.open(...)`. Usamos ele porque o
+    // renderer DOM padrão mede largura de caractere via canvas e, em webviews
+    // Linux (webkitgtk), reporta largura incorreta para acentuados — abrindo
+    // gaps visuais ao digitar `ó`, `ç`, etc. WebGL usa texture atlas e não
+    // depende dessa medição. Se o contexto WebGL falhar, volta ao DOM.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        try {
+          webgl.dispose();
+        } catch {}
+        e.webgl = undefined;
+      });
+      e.term.loadAddon(webgl);
+      e.webgl = webgl;
+    } catch (err) {
+      console.warn("WebGL renderer falhou, usando DOM", err);
+    }
     e.fit?.fit();
     if (e.pty) {
       try {
@@ -640,6 +665,11 @@ class SessionStore {
     if (e.pty) {
       try {
         e.pty.kill();
+      } catch {}
+    }
+    if (e.webgl) {
+      try {
+        e.webgl.dispose();
       } catch {}
     }
     if (e.term) {
